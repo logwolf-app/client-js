@@ -5,15 +5,15 @@
 	"keywords": [
 		"logwolf"
 	],
-	"homepage": "https://github.com/jpricardo/logwolf#readme",
+	"homepage": "https://github.com/logwolf-app/client-js#readme",
 	"bugs": {
-		"url": "https://github.com/jpricardo/logwolf/issues"
+		"url": "https://github.com/logwolf-app/client-js/issues"
 	},
 	"license": "ISC",
 	"author": "jpricardo",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/jpricardo/logwolf.git"
+		"url": "git+https://github.com/logwolf-app/client-js.git"
 	},
 	"directories": {
 		"lib": "lib"
