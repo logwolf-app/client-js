@@ -1,0 +1,7 @@
+# Layered on the core's docker-compose.yml for the smoke test: the broker's
+# port on the host, so the test reaches it directly, internal routes included.
+# Caddy and the frontend are not started.
+services:
+  broker:
+    ports:
+      - '127.0.0.1:8080:80'

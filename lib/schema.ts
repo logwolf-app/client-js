@@ -25,11 +25,26 @@ export const LogwolfDatetimeSchema = z.codec(z.iso.datetime(), z.date(), {
 	encode: (date) => date.toISOString(),
 });
 
+/**
+ * A stored event's severity. Events stored before the server began normalizing
+ * severities keep the casing they were sent with, so `ERROR` reads as `error`.
+ */
+export const LogwolfStoredSeveritySchema = z.codec(z.string(), LogwolfEventSeveritySchema, {
+	decode: (severity) => severity.trim().toLowerCase() as Severity,
+	encode: (severity) => severity,
+});
+
+/** A stored event's tags: the server answers `null` for an event sent without any. */
+export const LogwolfStoredTagsSchema = z.codec(z.array(z.string()).nullable(), z.array(z.string()), {
+	decode: (tags) => tags ?? [],
+	encode: (tags) => tags,
+});
+
 export const LogwolfEventSchema = z.object({
 	id: z.string(),
 	name: z.string(),
-	severity: LogwolfEventSeveritySchema,
-	tags: z.array(z.string()),
+	severity: LogwolfStoredSeveritySchema,
+	tags: LogwolfStoredTagsSchema,
 	data: LogwolfEventDataSchema,
 	duration: z.int().optional(),
 	created_at: LogwolfDatetimeSchema,
@@ -38,12 +53,14 @@ export const LogwolfEventSchema = z.object({
 
 export type LogwolfEventData = z.infer<typeof LogwolfEventSchema>;
 
+// What the SDK sends is held to the strict forms, not the stored ones.
 export const CreateLogwolfEventDTOSchema = LogwolfEventSchema.pick({
 	name: true,
-	severity: true,
-	tags: true,
 	data: true,
 	duration: true,
+}).extend({
+	severity: LogwolfEventSeveritySchema,
+	tags: z.array(z.string()),
 });
 export type CreateLogwolfEventDTO = z.infer<typeof CreateLogwolfEventDTOSchema>;
 
@@ -68,7 +85,7 @@ export const LogwolfConfigSchema = z.object({
 
 export type LogwolfConfig = z.infer<typeof LogwolfConfigSchema>;
 
-export const LogwolfEventDTOSchema = LogwolfEventSchema.pick({
+export const LogwolfEventDTOSchema = CreateLogwolfEventDTOSchema.pick({
 	name: true,
 	severity: true,
 	tags: true,

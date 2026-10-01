@@ -376,6 +376,24 @@ describe('Logwolf', () => {
 			expect(event?.name).toBe('Checkout failed');
 		});
 
+		it('reads an event sent without tags as having none', async () => {
+			respond(200, { error: false, message: 'OK!', data: { ...stored, tags: null } });
+			const client = new Logwolf(testConfig);
+
+			const event = await client.getOne(stored.id);
+
+			expect(event?.tags).toEqual([]);
+		});
+
+		it('reads a severity stored before the server normalized them', async () => {
+			respond(200, { error: false, message: 'OK!', data: { ...stored, severity: ' ERROR ' } });
+			const client = new Logwolf(testConfig);
+
+			const event = await client.getOne(stored.id);
+
+			expect(event?.severity).toBe('error');
+		});
+
 		it('is undefined when the key’s project has no such event', async () => {
 			respond(404, { error: true, message: 'log not found' });
 			const client = new Logwolf(testConfig);
