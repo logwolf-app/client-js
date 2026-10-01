@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `getAll()` and `getOne()` read an event sent without tags, which the server returns with `tags: null`, as having none (`[]`). They used to throw.
+- They read a severity stored before the server began normalizing severities (`ERROR`, ` Warning `) as its lower-case form. They used to throw.
+
 ## 2.0.0
 
 Needs a Logwolf server with `GET /logs/:id`: the multi-tenancy release or later. Against an older server, `getOne` always resolves to `undefined`.
