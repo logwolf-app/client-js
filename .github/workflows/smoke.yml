@@ -1,0 +1,123 @@
+name: Smoke test
+
+# Runs the SDK against the stack a core release publishes (ghcr.io/logwolf-app/
+# <service>, started by the core's own docker-compose.yml), and holds
+# lib/schema.ts against that release's OpenAPI spec. The SDK and the core live
+# in different repositories, so this is where they meet. See "Smoke test" in
+# docs/OVERVIEW.md.
+
+on:
+  pull_request:
+  schedule:
+    # Daily, so a core release that breaks the SDK shows up without an SDK change.
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+    inputs:
+      core-release:
+        description: The core release to test against, e.g. v1.2.0. The latest when empty.
+        required: false
+        default: ''
+
+jobs:
+  core-release:
+    name: Find the core release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+      version: ${{ steps.find.outputs.version }}
+    steps:
+      # The latest is GitHub's "Latest" release, the one the core publishes the
+      # images' latest tag for. Until the core has one there is nothing to test.
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.core-release }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            tag=$(gh api "repos/logwolf-app/logwolf/releases/tags/$REQUESTED" --jq .tag_name)
+          elif out=$(gh api repos/logwolf-app/logwolf/releases/latest --jq .tag_name 2>&1); then
+            tag="$out"
+          elif grep -q 'HTTP 404' <<<"$out"; then
+            echo "::warning::logwolf-app/logwolf has no release yet, so there is nothing to smoke-test against"
+            exit 0
+          else
+            echo "$out" >&2
+            exit 1
+          fi
+          # Only v* releases publish the images.
+          if [[ "$tag" != v* ]]; then
+            echo "::error::$tag is not a core release (v*): it publishes no images"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Smoke-testing against logwolf-app/logwolf $tag" >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: SDK against the published stack
+    needs: core-release
+    if: needs.core-release.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      COMPOSE_FILE: core/docker-compose.yml:smoke/compose.yml
+      COMPOSE_PROJECT_NAME: logwolf-smoke
+      LOGWOLF_VERSION: ${{ needs.core-release.outputs.version }}
+      # Compose refuses the core's file without these. The stack is thrown away
+      # with the job, so any value does.
+      SESSION_SECRET: smoke
+      INTERNAL_API_SECRET: smoke
+      MONGO_USERNAME: smoke
+      MONGO_PASSWORD: smoke
+      RABBITMQ_USERNAME: smoke
+      RABBITMQ_PASSWORD: smoke
+    steps:
+      - uses: actions/checkout@v4
+
+      # The release's compose file and spec, so the stack is started the way
+      # that release is, and the SDK is held to that release's API.
+      - uses: actions/checkout@v4
+        with:
+          repository: logwolf-app/logwolf
+          ref: ${{ needs.core-release.outputs.tag }}
+          path: core
+          sparse-checkout: |
+            docker-compose.yml
+            openapi.yaml
+          sparse-checkout-cone-mode: false
+
+      # Caddy and the frontend are left out: the test talks to the broker.
+      - name: Start the stack
+        run: |
+          docker compose pull broker listener logger mongo rabbitmq
+          docker compose up -d broker listener logger mongo rabbitmq
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the contract check and the smoke test
+        env:
+          LOGWOLF_OPENAPI: core/openapi.yaml
+          LOGWOLF_SMOKE_URL: http://localhost:8080
+          LOGWOLF_SMOKE_INTERNAL_SECRET: ${{ env.INTERNAL_API_SECRET }}
+        run: pnpm run test:smoke
+
+      - name: Show the stack's logs
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
