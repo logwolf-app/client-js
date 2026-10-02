@@ -9,6 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # npm trusted publishing: the job trades a GitHub OIDC token for a
+      # short-lived publish token, so no NPM_TOKEN secret is needed.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v6
@@ -17,7 +20,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org/
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: install
@@ -40,8 +42,8 @@ jobs:
       - name: test
         run: pnpm exec vitest run
       # A release checks out its tag, a detached HEAD, which pnpm's
-      # publish-branch check would refuse.
+      # publish-branch check would refuse. pnpm authenticates through the
+      # trusted publisher configured for this workflow on npmjs.com; setup-node
+      # gets no registry-url, so no token in .npmrc competes with it.
       - name: publish
-        run: pnpm publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --access public --no-git-checks --provenance
