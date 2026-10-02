@@ -36,3 +36,7 @@ Severity is one of `info`, `warning`, `error` or `critical`.
 
 - [SDK reference](https://github.com/jpricardo/logwolf/blob/main/docs/sdk/js.md): every option and method.
 - [Changelog](https://github.com/jpricardo/logwolf/blob/main/logwolf-client/js/CHANGELOG.md): 2.0.0 changed `getOne` and `getAll`'s pagination, and needs a recent Logwolf server.
+
+## License
+
+ISC — see [LICENSE](./LICENSE). The SDK ships inside your application, so its licence is permissive: use, modify and distribute it freely, keeping the copyright and permission notice. The Logwolf server is licensed separately, under the [GNU AGPL v3](https://github.com/jpricardo/logwolf#license).
