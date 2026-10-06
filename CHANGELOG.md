@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- A batch refused with `429` waits as long as the server's `Retry-After` asks, in seconds or as an HTTP date, before it is retried; it waits for its `retryDelaysMs` delay instead if that is longer. If `Retry-After` is longer than `maxRetryAfterMs` (new, optional, default `DEFAULT_MAX_RETRY_AFTER_MS`: 60 s), the batch is dropped instead of holding the queue, and so is one still rate-limited after every retry: `onDropped` gets the reason `rate_limited`.
+- A batch refused because the organization has used its monthly event quota (`429` with the code `quota_exceeded`) is not retried: `onDropped` gets it at once, with the reason `quota_exceeded`.
+- `parseRetryAfter(value, now)`, exported.
+
 ### Fixed
 
 - `getAll()` and `getOne()` read an event sent without tags, which the server returns with `tags: null`, as having none (`[]`). They used to throw.
