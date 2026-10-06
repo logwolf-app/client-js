@@ -55,7 +55,7 @@ await client.delete(id);
 
 1. `capture()` validates the event with Zod and pushes it to an in-memory queue.
 2. A background timer (default 5 s) batches queued events and `POST /logs/batch`.
-3. Failed requests retry with exponential back-off (up to 3 attempts).
+3. Failed requests retry with exponential back-off (up to 3 attempts). A `429` waits at least its `Retry-After` (dropped as `rate_limited` past `maxRetryAfterMs`); a `429` with the code `quota_exceeded` is not retried and goes straight to `onDropped`.
 4. If the queue exceeds `maxBatchSize`, the oldest events are evicted (FIFO).
 
 ## Key design decisions

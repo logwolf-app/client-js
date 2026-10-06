@@ -13,6 +13,27 @@ import {
 	type Pagination,
 } from './schema';
 
+/**
+ * The longest a rate-limited batch waits for the server by default; see
+ * `maxRetryAfterMs`.
+ */
+export const DEFAULT_MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * Reads a `Retry-After` header, in seconds or as an HTTP date, as the
+ * milliseconds to wait from `now`. A date in the past is no wait; a missing
+ * or unreadable header is `undefined`.
+ */
+export function parseRetryAfter(value: string | null, now: number): number | undefined {
+	if (value === null) return undefined;
+	const trimmed = value.trim();
+	if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+
+	const date = Date.parse(trimmed);
+	if (Number.isNaN(date)) return undefined;
+	return Math.max(0, date - now);
+}
+
 export class Logwolf {
 	private readonly config: LogwolfConfig;
 	private readonly baseUrl: URL;
@@ -52,6 +73,16 @@ export class Logwolf {
 	private handleResponse<T>(r: LogwolfApiResponse<T>): T {
 		if (r.error) throw new Error(r.message);
 		return r.data;
+	}
+
+	/** The `code` of an error body, or `undefined` if there is none. */
+	private async errorCode(response: Response): Promise<string | undefined> {
+		try {
+			const body = (await response.json()) as { code?: unknown } | null;
+			return typeof body?.code === 'string' ? body.code : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	private sleep(ms: number): Promise<void> {
@@ -220,9 +251,15 @@ export class Logwolf {
 		const url = new URL('logs/batch', this.baseUrl);
 		const body = JSON.stringify(batch.map((ev) => ev.toObject()));
 
+		const maxRetryAfterMs = this.config.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS;
 		let lastError: unknown;
+		let rateLimited = false;
 
 		for (let attempt = 0; attempt <= this.config.retryDelaysMs.length; attempt++) {
+			// How long the server asked us to wait, on a 429.
+			let retryAfterMs = 0;
+			rateLimited = false;
+
 			try {
 				const response = await this.fetchWithTimeout(url, {
 					method: 'POST',
@@ -238,6 +275,26 @@ export class Logwolf {
 
 				if (response.ok) return;
 
+				if (response.status === 429) {
+					// Over the monthly quota: retrying cannot succeed before the
+					// month is over, so surface it instead.
+					if ((await this.errorCode(response)) === 'quota_exceeded') {
+						this.config.onDropped?.(batch, 'quota_exceeded');
+						return;
+					}
+
+					// Rate-limited: wait at least as long as the server asks, but
+					// give the batch up rather than hold the queue for longer
+					// than maxRetryAfterMs.
+					const wait = parseRetryAfter(response.headers.get('Retry-After'), Date.now());
+					if (wait !== undefined && wait > maxRetryAfterMs) {
+						this.config.onDropped?.(batch, 'rate_limited');
+						return;
+					}
+					retryAfterMs = wait ?? 0;
+					rateLimited = true;
+				}
+
 				// Non-2xx that isn't an auth error — retry.
 				lastError = new Error(`Server returned ${response.status}`);
 			} catch (err) {
@@ -247,8 +304,14 @@ export class Logwolf {
 
 			// Wait before the next attempt, unless this was the last one.
 			if (attempt < this.config.retryDelaysMs.length) {
-				await this.sleep(this.config.retryDelaysMs[attempt]!);
+				await this.sleep(Math.max(this.config.retryDelaysMs[attempt]!, retryAfterMs));
 			}
+		}
+
+		// Still rate-limited after every retry.
+		if (rateLimited) {
+			this.config.onDropped?.(batch, 'rate_limited');
+			return;
 		}
 
 		throw lastError;

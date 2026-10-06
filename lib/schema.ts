@@ -67,7 +67,14 @@ export type CreateLogwolfEventDTO = z.infer<typeof CreateLogwolfEventDTOSchema>;
 export const DeleteLogwolfEventDTOSchema = LogwolfEventSchema.pick({ id: true });
 export type DeleteLogwolfEventDTO = z.infer<typeof DeleteLogwolfEventDTOSchema>;
 
-export type LogwolfApiResponse<T> = { message: string } & ({ error: true } | { error: false; data: T });
+export type LogwolfApiResponse<T> = { message: string } & (
+	| {
+			error: true;
+			/** Tells apart refusals that share a status, e.g. a 429's `rate_limited` or `quota_exceeded`. */
+			code?: string;
+	  }
+	| { error: false; data: T }
+);
 
 export const LogwolfConfigSchema = z.object({
 	url: z.url(),
@@ -80,6 +87,9 @@ export const LogwolfConfigSchema = z.object({
 	maxQueueSize: z.number().positive(),
 	retryDelaysMs: z.number().gte(0).array(),
 	requestTimeoutMs: z.number().positive(),
+	// The longest a rate-limited batch waits for Retry-After before it is
+	// dropped; DEFAULT_MAX_RETRY_AFTER_MS when unset.
+	maxRetryAfterMs: z.number().gte(0).optional(),
 	onDropped: z.function({ input: [z.any().array(), z.string()] }).optional(),
 });
 

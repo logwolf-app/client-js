@@ -300,6 +300,133 @@ describe('Logwolf', () => {
 		});
 	});
 
+	// --- 429 & Retry-After ---
+
+	describe('429 and Retry-After', () => {
+		function tooMany(code?: string, retryAfter?: string) {
+			const headers: Record<string, string> = retryAfter === undefined ? {} : { 'Retry-After': retryAfter };
+			return new Response(JSON.stringify({ error: true, message: 'Too many', code }), { status: 429, headers });
+		}
+
+		function clientWith(config: Partial<LogwolfConfig> = {}) {
+			const droppedReasons: string[] = [];
+			const client = new Logwolf({
+				...testConfig,
+				sampleRate: 1,
+				maxBatchSize: 100,
+				retryDelaysMs: [0],
+				onDropped: (_, reason) => droppedReasons.push(reason),
+				...config,
+			});
+			client.capture(makeEvent());
+			return { client, droppedReasons };
+		}
+
+		it('waits the seconds Retry-After asks before retrying', async () => {
+			mockFetch.mockResolvedValueOnce(tooMany('rate_limited', '5')).mockReturnValueOnce(okResponse());
+			const { client, droppedReasons } = clientWith();
+
+			const flushed = client.flush();
+			await vi.advanceTimersByTimeAsync(4999);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(1);
+			await flushed;
+			expect(mockFetch).toHaveBeenCalledTimes(2);
+			expect(droppedReasons).toEqual([]);
+			client.destroy();
+		});
+
+		it('waits until the HTTP date Retry-After names', async () => {
+			vi.setSystemTime(new Date('2026-10-06T12:00:00Z'));
+			mockFetch
+				.mockResolvedValueOnce(tooMany('rate_limited', 'Tue, 06 Oct 2026 12:00:07 GMT'))
+				.mockReturnValueOnce(okResponse());
+			const { client } = clientWith();
+
+			const flushed = client.flush();
+			await vi.advanceTimersByTimeAsync(6999);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(1);
+			await flushed;
+			expect(mockFetch).toHaveBeenCalledTimes(2);
+			client.destroy();
+		});
+
+		it('keeps the back-off when it is longer than Retry-After', async () => {
+			mockFetch.mockResolvedValueOnce(tooMany('rate_limited', '1')).mockReturnValueOnce(okResponse());
+			const { client } = clientWith({ retryDelaysMs: [3000] });
+
+			const flushed = client.flush();
+			await vi.advanceTimersByTimeAsync(2999);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(1);
+			await flushed;
+			expect(mockFetch).toHaveBeenCalledTimes(2);
+			client.destroy();
+		});
+
+		it('falls back to the back-off on a missing or unreadable Retry-After', async () => {
+			mockFetch
+				.mockResolvedValueOnce(tooMany())
+				.mockResolvedValueOnce(tooMany('rate_limited', 'soon'))
+				.mockReturnValueOnce(okResponse());
+			const { client, droppedReasons } = clientWith({ retryDelaysMs: [0, 0] });
+
+			await drainTimers(client.flush());
+
+			expect(mockFetch).toHaveBeenCalledTimes(3);
+			expect(droppedReasons).toEqual([]);
+			client.destroy();
+		});
+
+		it('drops a batch over the monthly quota at once, through onDropped', async () => {
+			mockFetch.mockResolvedValue(tooMany('quota_exceeded', '2000000'));
+			const { client, droppedReasons } = clientWith({ retryDelaysMs: [0, 0, 0] });
+
+			await drainTimers(client.flush());
+
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+			expect(droppedReasons).toEqual(['quota_exceeded']);
+			client.destroy();
+		});
+
+		it('drops a rate-limited batch whose Retry-After is past maxRetryAfterMs', async () => {
+			mockFetch.mockResolvedValue(tooMany('rate_limited', '120'));
+			const { client, droppedReasons } = clientWith({ retryDelaysMs: [0, 0, 0] });
+
+			await drainTimers(client.flush());
+
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+			expect(droppedReasons).toEqual(['rate_limited']);
+			client.destroy();
+		});
+
+		it('honours maxRetryAfterMs when it is set', async () => {
+			mockFetch.mockResolvedValueOnce(tooMany('rate_limited', '120')).mockReturnValueOnce(okResponse());
+			const { client, droppedReasons } = clientWith({ maxRetryAfterMs: 120_000 });
+
+			await drainTimers(client.flush(), { step: 60_000, max: 3 });
+
+			expect(mockFetch).toHaveBeenCalledTimes(2);
+			expect(droppedReasons).toEqual([]);
+			client.destroy();
+		});
+
+		it('drops the batch as rate_limited when every retry is rate-limited', async () => {
+			mockFetch.mockImplementation(() => Promise.resolve(tooMany('rate_limited', '1')));
+			const { client, droppedReasons } = clientWith({ retryDelaysMs: [0, 0] });
+
+			await drainTimers(client.flush(), { step: 1000 });
+
+			expect(mockFetch).toHaveBeenCalledTimes(3);
+			expect(droppedReasons).toEqual(['rate_limited']);
+			client.destroy();
+		});
+	});
+
 	// --- destroy() ---
 
 	describe('destroy()', () => {
